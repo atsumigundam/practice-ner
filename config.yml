@@ -2,7 +2,7 @@ bilstm+crf:
   epoch: 5
   word_lstm_layers: 1
   char_lstm_layers: 1
-  batch: 4
+  batch: 64
   word_embed: 256
   char_embed: 128
   word_hidden: 512

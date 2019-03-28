@@ -16,25 +16,25 @@ logger.setLevel(INFO)
 logger.addHandler(handler)
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 class BiLSTM_CRF(nn.Module):
-    def __init__(self,batch_size,vocab_size,tag_to_ix,embedding_dim, hidden_dim,char_vocab_size,char_embedding_dim,char_hidden_dim):
+    def __init__(self,batch_size,word_vocab_size,tag_to_ix,word_embedding_dim, word_hidden_dim,char_vocab_size,char_embedding_dim,char_hidden_dim):
         super(BiLSTM_CRF, self).__init__()
         self.batch_size = batch_size
         #charlstmpart
         self.char_embedding_dim = char_embedding_dim
         self.char_hidden_dim = char_hidden_dim
         self.char_vocab_size = char_vocab_size
-        self.char_embeds = nn.Embedding(char_vocab_size,char_embedding_dim,padding_idx=0)
-        self.char_lstm = nn.LSTM(char_embedding_dim, char_hidden_dim//2,num_layers=1, bidirectional=True,batch_first = True)
+        self.char_embeds = nn.Embedding(char_vocab_size,char_embedding_dim,padding_idx=PAD_TAG[1])
+        self.char_lstm = nn.LSTM(char_embedding_dim, char_hidden_dim//2,num_layers=char_lstm_layers, bidirectional=True,batch_first = True)
         self.char_hidden = 0
         #wordlstmpart
-        self.embedding_dim = embedding_dim
-        self.hidden_dim = hidden_dim
-        self.vocab_size = vocab_size
+        self.word_embedding_dim = word_embedding_dim
+        self.word_hidden_dim = word_hidden_dim
+        self.word_vocab_size = word_vocab_size
         self.tag_to_ix = tag_to_ix
         self.tagset_size = len(tag_to_ix)
-        self.word_embeds = nn.Embedding(vocab_size,embedding_dim,padding_idx=0)
-        self.lstm = nn.LSTM(embedding_dim+char_hidden_dim, hidden_dim // 2,num_layers=1, bidirectional=True,batch_first=True)
-        self.hidden2tag = nn.Linear(hidden_dim, self.tagset_size)
+        self.word_embeds = nn.Embedding(word_vocab_size,word_embedding_dim,padding_idx=PAD_TAG[1])
+        self.word_lstm = nn.LSTM(word_embedding_dim+char_hidden_dim, word_hidden_dim // 2,num_layers=word_lstm_layers, bidirectional=True,batch_first=True)
+        self.hidden2tag = nn.Linear(word_hidden_dim, self.tagset_size)
         self.hidden = 0
         # CRF part
         self.transitions = nn.Parameter(
@@ -42,11 +42,11 @@ class BiLSTM_CRF(nn.Module):
         self.transitions.data[tag_to_ix[START_TAG[0]], :] = -10000
         self.transitions.data[:, tag_to_ix[STOP_TAG[0]]] = -10000
     def init_hidden(self,size):
-        return (torch.randn(2, size,self.hidden_dim // 2),
-                torch.randn(2, size, self.hidden_dim // 2))
+        return (torch.randn(2, size,self.word_hidden_dim // 2,device=device),
+                torch.randn(2, size, self.word_hidden_dim // 2,device=device))
     def init_char_hidden(self,size):
-        return (torch.randn(2,size,self.char_hidden_dim // 2),
-                torch.randn(2,size,self.char_hidden_dim // 2))
+        return (torch.randn(2,size,self.char_hidden_dim // 2,device=device),
+                torch.randn(2,size,self.char_hidden_dim // 2,device=device))
     def _get_char_lstm_features(self, charlist):
         self.char_hidden = self.init_char_hidden(charlist.size(0)*charlist.size(1))
         char_embeds = self.char_embeds(charlist)
@@ -55,17 +55,17 @@ class BiLSTM_CRF(nn.Module):
         lstm_out = lstm_out[:,-1,:].view(charlist.size(0),charlist.size(1),-1)
         return lstm_out
     def _get_lstm_features(self, sentence,char_lstm_out):
-        self.hidden = self.init_hidden(sentence.size(0))
+        self.word_hidden = self.init_hidden(sentence.size(0))
         embeds = self.word_embeds(sentence)
         newembeds = torch.cat([char_lstm_out,embeds],dim=-1)
-        lstm_out, self.hidden = self.lstm(newembeds, self.hidden)
+        lstm_out, self.word_hidden = self.word_lstm(newembeds, self.word_hidden)
         lstm_feats = self.hidden2tag(lstm_out)
         return lstm_feats
     def _predict_get_lstm_features(self, sentence):
-        self.hidden = self.init_hidden()
+        self.word_hidden = self.init_hidden()
         embeds = self.word_embeds(sentence).view(len(sentence),1,-1)
-        lstm_out, self.hidden = self.lstm(embeds, self.hidden)
-        lstm_out = lstm_out.view(len(sentence), self.hidden_dim)
+        lstm_out, self.word_hidden = self.word_lstm(embeds, self.word_hidden)
+        lstm_out = lstm_out.view(len(sentence), self.word_hidden_dim)
         lstm_feats = self.hidden2tag(lstm_out)
         return lstm_feats
     def neg_log_likelihood(self, sentencelist,chars,tagslist):
@@ -217,10 +217,11 @@ def makeminibatch(training_data):
 
 def train(train_data,word_to_id,char_to_id,label_to_id,MODEL_FILE):
     logger.info("========= WORD_SIZE={} ==========".format(len(word_to_id)))
+    logger.info("========= CHAR_SIZE={} ==========".format(len(char_to_id)))
     logger.info("========= TRAIN_SIZE={} =========".format(len(train_data)))
     logger.info("========= START_TRAIN ==========")
     model = BiLSTM_CRF(batch_size,len(word_to_id),label_to_id,word_embed_size,word_hidden_size,len(char_to_id),char_embed_size,char_hidden_size).to(device)
-    optimizer = optim.Adam(model.parameters(), lr=0.01, weight_decay=1e-4)
+    model_optimizer = optim.Adam(model.parameters(), lr=0.01, weight_decay=1e-4)
     all_EPOCH_LOSS = []
     for epoch in range(epoch_num):
         total_loss = 0
@@ -246,18 +247,20 @@ def train(train_data,word_to_id,char_to_id,label_to_id,MODEL_FILE):
                     word.extend([[PAD_TAG[1]]]*(max(word_length)-len(word)))
                     word=[char if len(char)==max_char_length else char+[char_to_id[PAD_TAG[0]] for i in range(max_char_length - len(char))] for char in word]
                     input_char_data.append(word)
-                       
+            #train part
             input_word_data=torch.tensor(input_word_data,dtype=torch.long,device=device)
             input_char_data=torch.tensor(input_char_data,dtype=torch.long,device=device)
             input_label_data = torch.tensor(input_label_data,dtype=torch.long,device=device)
             loss = model.neg_log_likelihood(input_word_data,input_char_data,input_label_data)
             loss.backward()
-            optimizer.step()
+            model_optimizer.step()
             total_loss += loss
             logger.info("=============== loss: %s ===============" % loss)
-            #print(input_char_data)
-            break
-        break
+        total_loss = total_loss/len(batch_training_data)
+        logger.info("=============== total_loss: %s ===============" % total_loss)
+        all_EPOCH_LOSS.append(total_loss)
+    [logger.info("================ batchnumber: {}---loss: {}=======================".format(batchnumber,loss)) for batchnumber,loss in enumerate(all_EPOCH_LOSS)]
+    torch.save(model.state_dict(), MODEL_FILE)
 """
 config
 """
