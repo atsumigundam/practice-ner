@@ -1,0 +1,17 @@
+bilstm+crf:
+  epoch: 5
+  word_lstm_layers: 1
+  char_lstm_layers: 1
+  word_lstm_dropout: 0.01
+  char_lstm_dropout: 0.01
+  batch: 64
+  word_embed: 256
+  char_embed: 128
+  word_lstm_hidden: 512
+  char_lstm_hidden: 256
+  model: ./resources/testmodel
+train_file:
+  path: ./resources/train.txt
+valid_file:
+  path: ./resources/valid.txt
+save_model_path:  ./resources/testmodel
