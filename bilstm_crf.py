@@ -41,7 +41,7 @@ class BiLSTM_CRF(nn.Module):
             torch.randn(self.tagset_size, self.tagset_size))
         self.transitions.data[tag_to_ix[START_TAG[0]], :] = -10000
         self.transitions.data[:, tag_to_ix[STOP_TAG[0]]] = -10000
-    def init_hidden(self,size):
+    def init_word_hidden(self,size):
         return (torch.randn(2, size,self.word_hidden_dim // 2,device=device),
                 torch.randn(2, size, self.word_hidden_dim // 2,device=device))
     def init_char_hidden(self,size):
@@ -55,14 +55,14 @@ class BiLSTM_CRF(nn.Module):
         lstm_out = lstm_out[:,-1,:].view(charlist.size(0),charlist.size(1),-1)
         return lstm_out
     def _get_lstm_features(self, sentence,char_lstm_out):
-        self.word_hidden = self.init_hidden(sentence.size(0))
+        self.word_hidden = self.init_word_hidden(sentence.size(0))
         embeds = self.word_embeds(sentence)
         newembeds = torch.cat([char_lstm_out,embeds],dim=-1)
         lstm_out, self.word_hidden = self.word_lstm(newembeds, self.word_hidden)
         lstm_feats = self.hidden2tag(lstm_out)
         return lstm_feats
     def _predict_get_lstm_features(self, sentence):
-        self.word_hidden = self.init_hidden()
+        self.word_hidden = self.init_word_hidden()
         embeds = self.word_embeds(sentence).view(len(sentence),1,-1)
         lstm_out, self.word_hidden = self.word_lstm(embeds, self.word_hidden)
         lstm_out = lstm_out.view(len(sentence), self.word_hidden_dim)
@@ -200,10 +200,9 @@ def get_train_data(TRAIN_FILE):
     logger.debug(id_to_word)
     logger.debug(id_to_char)
     logger.debug(id_to_label)
-    #print(labels)
     train_data = [[transform_word(sent,word_to_id),transform_char(word,char_to_id),transform_label(label,label_to_id)] for (sent,word,label) in zip(sents,words,labels)]
     return word_to_id,char_to_id,label_to_id,id_to_word,id_to_char,id_to_label,train_data
-def makeminibatch(training_data):
+def make_minibatch(training_data):
     n = len(training_data)
     mini_batch_size = int(n/batch_size)
     random.shuffle(training_data)
@@ -226,7 +225,7 @@ def train(train_data,word_to_id,char_to_id,label_to_id,MODEL_FILE):
     for epoch in range(epoch_num):
         total_loss = 0
         logger.info("=============== EPOCH {} {} ===============".format(epoch + 1, datetime.now()))
-        batch_training_data = makeminibatch(train_data)
+        batch_training_data = make_minibatch(train_data)
         for count,batch_data in enumerate(batch_training_data):
             logger.debug("===== {} / {} =====".format(count, len(batch_training_data)))
             word_data = [data[0] for data in batch_data]
